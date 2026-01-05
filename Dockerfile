@@ -1,33 +1,31 @@
-# Build stage
+# Production-ready multi-stage Dockerfile for a Vite app
+# Note: you already have host apps on ports 80, 8080 and 8081 —
+# run the built image mapping its container port 80 to a free host port (example: 8082)
+#   docker run -p 8082:80 your-image:tag
+
+# --- Build stage -----------------------------------------------------------
 FROM node:18-alpine AS builder
 WORKDIR /app
+
+# Install deps and build
 COPY package*.json ./
-RUN npm install
+RUN npm ci --prefer-offline --no-audit --progress=false
 COPY . .
 RUN npm run build
 
-# Production stage
-FROM node:18-alpine AS runner
-WORKDIR /app
+# --- Production stage (nginx) ---------------------------------------------
+FROM nginx:alpine AS production
 
-ENV NODE_ENV=production
+# Remove default nginx static content
+RUN rm -rf /usr/share/nginx/html/*
 
-# Add non-root user for security
-RUN addgroup --system --gid 1001 nodejs
-RUN adduser --system --uid 1001 nextjs
+# Copy built site from builder
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-COPY --from=builder /app/node_modules ./node_modules
-COPY --from=builder /app/src ./src
-COPY --from=builder /app/public ./public
-COPY --from=builder /app/package*.json ./
+# Optional: customize nginx config by adding a file at /etc/nginx/conf.d/default.conf
+# (left as default which serves files from /usr/share/nginx/html)
 
-RUN chown -R nextjs:nodejs /app
+# Expose container port 80 (map to any unused host port when running)
+EXPOSE 80
 
-USER nextjs
-
-EXPOSE 5175
-
-ENV PORT=5175
-ENV HOSTNAME=0.0.0.0
-
-CMD ["npm", "run", "dev"] 
+CMD ["nginx", "-g", "daemon off;"] 

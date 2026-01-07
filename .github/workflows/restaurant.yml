@@ -84,3 +84,4 @@ jobs:
             echo "Deployment complete!"
             echo "Files in /var/www/html:"
             ls -la /var/www/html/
+            

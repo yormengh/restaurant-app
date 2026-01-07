@@ -15,52 +15,72 @@ jobs:
       - name: Checkout the files
         uses: actions/checkout@v4
 
-      # Add Node.js setup
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      # Install dependencies
       - name: Install dependencies
         run: npm ci
 
-      # Build the React app
       - name: Build the app
         run: npm run build
 
-      # Deploy only the dist folder (build output)
       - name: Deploy to Server
         uses: easingthemes/ssh-deploy@main
         with:
           SSH_PRIVATE_KEY: ${{ secrets.EC2_SSH_KEY }}
           REMOTE_HOST: ${{ secrets.HOST_DNS }}
           REMOTE_USER: ${{ secrets.EC2_USER }}
-          SOURCE: "dist/"  # Only deploy the build output
-          TARGET: ${{ secrets.TARGET_DIR }}
+          SOURCE: "dist/"
+          TARGET: "/home/${{ secrets.EC2_USER }}/app-deploy"  # Use explicit path
+          EXCLUDE: "/dist/, **/.git*"
 
-      - name: Executing remote ssh commands using ssh key
+      - name: Move files and configure Apache
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.HOST_DNS }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            # Install Apache if not installed
             sudo apt-get -y update
             sudo apt-get install -y apache2
             
-            # Remove existing contents of /var/www/html
+            # Remove existing contents
             sudo rm -rf /var/www/html/*
             
-            # Move build files to /var/www/html
-            sudo mv ${{ secrets.TARGET_DIR }}/dist/* /var/www/html/
+            # Copy build files to Apache root
+            sudo cp -r /home/${{ secrets.EC2_USER }}/app-deploy/* /var/www/html/
+            
+            # Verify index.html exists
+            if [ ! -f /var/www/html/index.html ]; then
+              echo "ERROR: index.html not found!"
+              ls -la /var/www/html/
+              exit 1
+            fi
             
             # Set proper permissions
             sudo chown -R www-data:www-data /var/www/html
             sudo chmod -R 755 /var/www/html
             
-            # Enable Apache rewrite module for SPA routing
+            # Create .htaccess for SPA routing
+            echo '<IfModule mod_rewrite.c>' | sudo tee /var/www/html/.htaccess
+            echo '  RewriteEngine On' | sudo tee -a /var/www/html/.htaccess
+            echo '  RewriteBase /' | sudo tee -a /var/www/html/.htaccess
+            echo '  RewriteRule ^index\.html$ - [L]' | sudo tee -a /var/www/html/.htaccess
+            echo '  RewriteCond %{REQUEST_FILENAME} !-f' | sudo tee -a /var/www/html/.htaccess
+            echo '  RewriteCond %{REQUEST_FILENAME} !-d' | sudo tee -a /var/www/html/.htaccess
+            echo '  RewriteRule . /index.html [L]' | sudo tee -a /var/www/html/.htaccess
+            echo '</IfModule>' | sudo tee -a /var/www/html/.htaccess
+            
+            # Configure Apache
             sudo a2enmod rewrite
+            sudo sed -i '/<Directory \/var\/www\/>/,/<\/Directory>/ s/AllowOverride None/AllowOverride All/' /etc/apache2/apache2.conf
             
             # Restart Apache
             sudo systemctl restart apache2
+            
+            echo "Deployment complete!"
+            echo "Files in /var/www/html:"
+            ls -la /var/www/html/
